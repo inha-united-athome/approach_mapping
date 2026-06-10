@@ -59,6 +59,7 @@ struct RunnerConfig
   int publish_heading_bin{0};
   double clearance_display_cap_m{1.5};
   double transform_timeout_sec{0.1};
+  double robot_forced_feasible_radius_m{0.3};
   bool preprocess_remove_nan_enable{true};
   bool preprocess_downsample_enable{true};
   bool preprocess_outlier_removal_enable{true};
@@ -141,6 +142,10 @@ RunnerConfig loadRunnerConfig(rclcpp::Node & node)
     node.declare_parameter("clearance_display_cap_m", config.clearance_display_cap_m);
   config.transform_timeout_sec =
     node.declare_parameter("transform_timeout_sec", config.transform_timeout_sec);
+  config.robot_forced_feasible_radius_m = std::max(
+    0.0,
+    node.declare_parameter(
+      "robot_forced_feasible_radius_m", config.robot_forced_feasible_radius_m));
   config.preprocess_remove_nan_enable =
     node.declare_parameter("preprocess_remove_nan_enable", config.preprocess_remove_nan_enable);
   config.preprocess_downsample_enable =
@@ -227,6 +232,33 @@ nav_msgs::msg::OccupancyGrid toOccupancyGrid(
   auto grid = makeBaseGrid(layer.meta, header);
   grid.data = layer.values;
   return grid;
+}
+
+void forceFeasibleWithinRadius(
+  approach_map::GridDataI8 & layer,
+  const approach_map::XYPoint & center,
+  double radius_m)
+{
+  if (radius_m <= 0.0 || layer.meta.resolution_m <= 0.0) {
+    return;
+  }
+
+  const double radius_squared_m = radius_m * radius_m;
+  for (std::size_t y_cell = 0; y_cell < layer.meta.height_cells; ++y_cell) {
+    const double y_m =
+      layer.meta.origin_y_m + (static_cast<double>(y_cell) + 0.5) * layer.meta.resolution_m;
+    for (std::size_t x_cell = 0; x_cell < layer.meta.width_cells; ++x_cell) {
+      const double x_m =
+        layer.meta.origin_x_m + (static_cast<double>(x_cell) + 0.5) * layer.meta.resolution_m;
+      const double dx = x_m - center.x_m;
+      const double dy = y_m - center.y_m;
+      if (dx * dx + dy * dy > radius_squared_m) {
+        continue;
+      }
+
+      layer.values[approach_map::flattenIndex(layer.meta, x_cell, y_cell)] = 100;
+    }
+  }
 }
 
 nav_msgs::msg::OccupancyGrid toNav2OccupancyGrid(
@@ -467,7 +499,7 @@ private:
     grasp_targets_pub_->publish(msg);
   }
 
-  void resetOriginFromTarget(double x_m, double y_m)
+   void resetOriginFromTarget(double x_m, double y_m)
   {
     const approach_map::Origin origin{
       x_m - 0.5 * map_config_.width_m,
@@ -782,6 +814,26 @@ private:
       y_m = map_from_robot.transform.translation.y;
       return true;
     } catch (const tf2::TransformException &) {
+
+  bool lookupRobotPoint(
+    const builtin_interfaces::msg::Time & stamp,
+    approach_map::XYPoint & robot_point)
+  {
+    geometry_msgs::msg::PointStamped robot_origin;
+    robot_origin.header.stamp = stamp;
+    robot_origin.header.frame_id = runner_config_.robot_filter_frame_id;
+
+    try {
+      const auto transformed = tf_buffer_->transform(
+        robot_origin, runner_config_.map_frame_id, transformTimeout());
+      robot_point = approach_map::XYPoint{transformed.point.x, transformed.point.y};
+      return true;
+    } catch (const tf2::TransformException & ex) {
+      RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 3000,
+        "Failed to locate robot frame %s in %s for forced feasible region: %s",
+        runner_config_.robot_filter_frame_id.c_str(),
+        runner_config_.map_frame_id.c_str(), ex.what());
       return false;
     }
   }
@@ -876,8 +928,13 @@ private:
     header.frame_id = runner_config_.map_frame_id;
 
     const auto obstacle_layer = builder_->buildObstacleLayer();
-    const auto feasible_layer = builder_->buildHeadingFeasibleLayer(
+    auto feasible_layer = builder_->buildHeadingFeasibleLayer(
       static_cast<std::size_t>(std::max(0, runner_config_.publish_heading_bin)));
+    approach_map::XYPoint robot_point;
+    if (lookupRobotPoint(header.stamp, robot_point)) {
+      forceFeasibleWithinRadius(
+        feasible_layer, robot_point, runner_config_.robot_forced_feasible_radius_m);
+    }
     obstacle_pub_->publish(toOccupancyGrid(obstacle_layer, header));
     nav2_obstacle_map_pub_->publish(toNav2OccupancyGrid(obstacle_layer, header));
     nav2_feasible_map_pub_->publish(toNav2FeasibleOccupancyGrid(feasible_layer, header));

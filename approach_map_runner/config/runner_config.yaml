@@ -24,6 +24,7 @@ approach_map_runner_node:
     publish_heading_bin: 0
     clearance_display_cap_m: 1.5
     transform_timeout_sec: 0.1
+    robot_forced_feasible_radius_m: 0.2
     preprocess_remove_nan_enable: true
     preprocess_downsample_enable: true
     preprocess_outlier_removal_enable: true
@@ -32,7 +33,7 @@ approach_map_runner_node:
     outlier_stddev_mul_thresh: 1.0
     robot_filter_enable: true
     robot_filter_x_min: -0.30
-    robot_filter_x_max: 0.50
+    robot_filter_x_max: 0.60
     robot_filter_y_min: -0.50
     robot_filter_y_max: 0.50
 

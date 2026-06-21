@@ -18,7 +18,7 @@ approach_map_runner_node:
     initial_origin_x_m: 0.0
     initial_origin_y_m: 0.0
     ground_z_min_m: -0.30
-    ground_z_max_m: -0.20
+    ground_z_max_m: -0.10
     obstacle_z_min_m: -0.11
     obstacle_z_max_m: 1.80
     publish_heading_bin: 0

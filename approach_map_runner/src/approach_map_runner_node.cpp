@@ -814,6 +814,9 @@ private:
       y_m = map_from_robot.transform.translation.y;
       return true;
     } catch (const tf2::TransformException &) {
+        return false;
+    }
+  }
 
   bool lookupRobotPoint(
     const builtin_interfaces::msg::Time & stamp,

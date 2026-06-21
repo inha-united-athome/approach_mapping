@@ -49,7 +49,7 @@ struct RunnerConfig
   std::string robot_filter_frame_id{"base_nav"};
   bool use_initial_origin{false};
   bool allow_origin_updates_after_first_click{false};
-  double target_update_threshold_m{2.0};
+  double mode1_origin_reset_threshold_m{1.7};
   double initial_origin_x_m{0.0};
   double initial_origin_y_m{0.0};
   double ground_z_min_m{-0.20};
@@ -121,8 +121,10 @@ RunnerConfig loadRunnerConfig(rclcpp::Node & node)
     node.declare_parameter("use_initial_origin", config.use_initial_origin);
   config.allow_origin_updates_after_first_click = node.declare_parameter(
     "allow_origin_updates_after_first_click", config.allow_origin_updates_after_first_click);
-  config.target_update_threshold_m =
-    node.declare_parameter("target_update_threshold_m", config.target_update_threshold_m);
+  config.mode1_origin_reset_threshold_m = std::max(
+    0.0,
+    node.declare_parameter(
+      "mode1_origin_reset_threshold_m", config.mode1_origin_reset_threshold_m));
   config.initial_origin_x_m =
     node.declare_parameter("initial_origin_x_m", config.initial_origin_x_m);
   config.initial_origin_y_m =
@@ -564,21 +566,21 @@ private:
         return;
       }
 
-      const std::size_t pair_count = (request->target.size() - 2U) / 2U;
-      if (pair_count == 0U) {
+      if ((request->target.size() % 2U) != 0U) {
         RCLCPP_WARN(
           this->get_logger(),
-          "Mode 1 requires at least one grasp object pair (target[2..3]), but only %zu values given.",
+          "Mode 1 requires object-only XY pairs, but received an odd target size: %zu.",
           request->target.size());
         response->success = false;
         return;
       }
 
+      const std::size_t pair_count = request->target.size() / 2U;
       std::vector<std::pair<double, double>> grasp_objects;
       grasp_objects.reserve(pair_count);
       for (std::size_t i = 0; i < pair_count; ++i) {
-        const double ox = static_cast<double>(request->target[2U + 2U * i]);
-        const double oy = static_cast<double>(request->target[3U + 2U * i]);
+        const double ox = static_cast<double>(request->target[2U * i]);
+        const double oy = static_cast<double>(request->target[1U + 2U * i]);
         if (!std::isfinite(ox) || !std::isfinite(oy)) {
           RCLCPP_WARN(
             this->get_logger(),
@@ -589,25 +591,44 @@ private:
         grasp_objects.emplace_back(ox, oy);
       }
 
-      bool target_updated = false;
-      if (!last_published_target_.has_value()) {
-        publishTargetPoint(target_x_m, target_y_m);
-        target_updated = true;
-      } else {
-        const double dx = target_x_m - last_published_target_->first;
-        const double dy = target_y_m - last_published_target_->second;
-        if (std::hypot(dx, dy) > runner_config_.target_update_threshold_m) {
-          publishTargetPoint(target_x_m, target_y_m);
-          target_updated = true;
-        }
+      double object_center_x_m = 0.0;
+      double object_center_y_m = 0.0;
+      for (const auto & [ox, oy] : grasp_objects) {
+        object_center_x_m += ox;
+        object_center_y_m += oy;
+      }
+      object_center_x_m /= static_cast<double>(grasp_objects.size());
+      object_center_y_m /= static_cast<double>(grasp_objects.size());
+
+      const auto map_origin = builder_->origin();
+      const double map_center_x_m = map_origin.x_m + 0.5 * map_config_.width_m;
+      const double map_center_y_m = map_origin.y_m + 0.5 * map_config_.height_m;
+      const double center_distance_m = std::hypot(
+        object_center_x_m - map_center_x_m,
+        object_center_y_m - map_center_y_m);
+      const bool forced_mode0 =
+        center_distance_m > runner_config_.mode1_origin_reset_threshold_m;
+
+      if (forced_mode0) {
+        resetOriginFromTarget(object_center_x_m, object_center_y_m);
+        publishTargetPoint(object_center_x_m, object_center_y_m);
+      } else if (!last_published_target_.has_value()) {
+        RCLCPP_WARN(
+          this->get_logger(),
+          "Mode 1 has no previously published reference target. Call mode 0 first.");
+        response->success = false;
+        return;
       }
 
       publishGraspTargets(grasp_objects);
 
       RCLCPP_INFO(
         this->get_logger(),
-        "Mode 1: grasp_objects=%zu target=(%.3f, %.3f) target_updated=%s (map preserved)",
-        grasp_objects.size(), target_x_m, target_y_m, target_updated ? "yes" : "no");
+        "Mode 1: grasp_objects=%zu object_center=(%.3f, %.3f) "
+        "previous_map_center=(%.3f, %.3f) distance=%.3f threshold=%.3f forced_mode0=%s",
+        grasp_objects.size(), object_center_x_m, object_center_y_m,
+        map_center_x_m, map_center_y_m, center_distance_m,
+        runner_config_.mode1_origin_reset_threshold_m, forced_mode0 ? "yes" : "no");
       response->success = true;
       return;
     }

@@ -14,7 +14,7 @@ approach_map_runner_node:
     robot_filter_frame_id: "base_nav"
     use_initial_origin: false
     allow_origin_updates_after_first_click: false
-    target_update_threshold_m: 2.0
+    mode1_origin_reset_threshold_m: 1.7
     initial_origin_x_m: 0.0
     initial_origin_y_m: 0.0
     ground_z_min_m: -0.30

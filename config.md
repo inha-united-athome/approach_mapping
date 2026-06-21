@@ -29,7 +29,7 @@
 | --- | --- | --- |
 | `use_initial_origin` | `false` | 시작 시 `initial_origin_*`을 맵 원점으로 사용할지 결정합니다. |
 | `allow_origin_updates_after_first_click` | `false` | 최초 target 지정 이후에도 target 클릭으로 맵 원점을 다시 옮길지 결정합니다. |
-| `target_update_threshold_m` | `2.0` | mode 1 요청에서 이전 target과 이 거리보다 멀어졌을 때만 target을 다시 발행합니다. |
+| `mode1_origin_reset_threshold_m` | `1.7` | mode 1 물체 centroid가 현재 맵 중심에서 이 거리보다 멀면 mode 0처럼 맵 evidence와 origin을 초기화하고 centroid를 새 target으로 발행합니다. |
 | `initial_origin_x_m` | `0.0` | 초기 맵 원점의 x 좌표입니다. |
 | `initial_origin_y_m` | `0.0` | 초기 맵 원점의 y 좌표입니다. |
 | `publish_heading_bin` | `0` | 여러 방향별 feasible 결과 중 발행할 heading bin 번호입니다. |

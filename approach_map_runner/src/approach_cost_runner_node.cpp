@@ -414,7 +414,7 @@ GraspReachResult computeGraspReach(
   result.reachable_count = 0U;
 
   const double r2 = radius_m * radius_m;
-  uint32_t intersection_cells = 0U;
+  std::vector<uint8_t> hits(num_cells, 0U);
   uint32_t best_count = 0U;
 
   for (std::size_t i = 0; i < num_cells; ++i) {
@@ -430,23 +430,35 @@ GraspReachResult computeGraspReach(
         ++hit;
       }
     }
+    hits[i] = static_cast<uint8_t>(hit);
     if (hit > best_count) {
       best_count = hit;
-    }
-    if (hit == grasp_objects.size()) {
-      result.reach_mask[i] = 1U;
-      ++intersection_cells;
     }
   }
 
   result.reachable_count = best_count;
-  if (intersection_cells > 0U) {
-    result.status = StatusMsg::OK;
-  } else if (best_count > 0U) {
-    result.status = StatusMsg::NO_INTERSECTION;
-  } else {
+
+  if (best_count == 0U) {
+    // No feasible cell is within reach of any object: nothing to approach.
     result.status = StatusMsg::NO_FEASIBLE_IN_INTERSECTION;
+    return result;
   }
+
+  // Prefer the true intersection (within reach of every object). When that is
+  // empty, fall back to the cells reachable by the most objects so the candidate
+  // set never collapses to nothing (which would blank the cost map and drop the
+  // goal with no recovery).
+  const uint32_t required = static_cast<uint32_t>(grasp_objects.size());
+  const bool have_intersection = (best_count >= required);
+  const uint32_t threshold = have_intersection ? required : best_count;
+  result.status = have_intersection ? StatusMsg::OK : StatusMsg::NO_INTERSECTION;
+
+  for (std::size_t i = 0; i < num_cells; ++i) {
+    if (feasible_mask[i] != 0U && hits[i] == threshold) {
+      result.reach_mask[i] = 1U;
+    }
+  }
+
   return result;
 }
 
@@ -759,7 +771,8 @@ private:
         "feasible_cells,reachable_start_found,reachable_feasible_cells,valid_cost_cells,"
         "candidate_cells,best_neighbor_cells,best_stable,approach_ready,best_cost,best_x_m,best_y_m,"
         "target_x_m,target_y_m,target_distance_m,robot_x_m,robot_y_m,"
-        "robot_distance_m,snapshot_saved\n";
+        "robot_distance_m,snapshot_saved,"
+        "cand_after_reachable,cand_after_visited,cand_after_grasp,visited_cells\n";
       debug_csv_.flush();
 
       std::ofstream readme(debug_session_dir_ / "README.txt", std::ios::out);
@@ -770,6 +783,9 @@ private:
         "Lower final-cost brightness is preferred. Feasible cells are white.\n"
         "CSV reachability: reachable_start_found indicates whether a feasible cell was found "
         "near the robot; reachable_feasible_cells counts its 4-connected region.\n"
+        "CSV candidate stages: cand_after_reachable -> cand_after_visited -> cand_after_grasp "
+        "show how many candidates survive each filter; visited_cells is the visited-map cell "
+        "count. A drop to 0 pinpoints which filter empties the goal set.\n"
         "target_frame=" << target.header.frame_id << "\n"
         "target_x_m=" << target.point.x << "\n"
         "target_y_m=" << target.point.y << "\n";
@@ -798,7 +814,11 @@ private:
     std::size_t candidate_count,
     std::size_t best_neighbor_count,
     bool best_is_stable,
-    bool approach_ready)
+    bool approach_ready,
+    std::size_t cand_after_reachable,
+    std::size_t cand_after_visited,
+    std::size_t cand_after_grasp,
+    std::size_t visited_cells)
   {
     if (!runner_config_.debug_save_enable || !debug_session_ready_) {
       return;
@@ -881,7 +901,11 @@ private:
       robot_point.x_m << "," <<
       robot_point.y_m << "," <<
       robot_distance_m << "," <<
-      (snapshot_saved ? 1 : 0) << "\n";
+      (snapshot_saved ? 1 : 0) << "," <<
+      cand_after_reachable << "," <<
+      cand_after_visited << "," <<
+      cand_after_grasp << "," <<
+      visited_cells << "\n";
     debug_csv_.flush();
   }
 
@@ -1004,6 +1028,15 @@ private:
         runner_config_.robot_start_search_radius_m);
     }
 
+    // Per-stage candidate counts for debugging which filter empties the set.
+    const std::size_t cand_after_reachable = countCandidateCells(input.candidate_mask);
+    std::size_t visited_cells = 0U;
+    if (latest_visited_map_.has_value()) {
+      const auto & vdata = latest_visited_map_.value().data;
+      visited_cells = static_cast<std::size_t>(
+        std::count_if(vdata.begin(), vdata.end(), [](int8_t v) {return v > 0;}));
+    }
+
     // Visited (robot-traversed) cells keep BFS connectivity above, but they must not
     // become goal candidates themselves — otherwise the goal collapses onto the robot
     // trail and chases the robot.
@@ -1021,6 +1054,7 @@ private:
           "Ignoring visited map because its grid geometry does not match feasible_map.");
       }
     }
+    const std::size_t cand_after_visited = countCandidateCells(input.candidate_mask);
 
     const auto grasp_objects = graspObjectsInFrame(map_frame);
     if (!grasp_objects.empty()) {
@@ -1040,6 +1074,7 @@ private:
         input.object_row_dir = row_dir.value();
       }
     }
+    const std::size_t cand_after_grasp = countCandidateCells(input.candidate_mask);
 
     if (latest_transition_map_.has_value()) {
       if (haveMatchingGridGeometry(*msg, latest_transition_map_.value())) {
@@ -1063,7 +1098,8 @@ private:
       saveDebugFrame(
         *msg, final_cost_grid, robot_point, input.target_point_m, best_index, callback_started,
         callback_received_time_sec, reachable.start_index.has_value(), reachable.reachable_count,
-        countCandidateCells(input.candidate_mask), 0U, false, false);
+        countCandidateCells(input.candidate_mask), 0U, false, false,
+        cand_after_reachable, cand_after_visited, cand_after_grasp, visited_cells);
       RCLCPP_WARN_THROTTLE(
         this->get_logger(), *this->get_clock(), 3000,
         "No valid cell found in final_cost_map for best cost pose.");
@@ -1094,7 +1130,8 @@ private:
     saveDebugFrame(
       *msg, final_cost_grid, robot_point, input.target_point_m, best_index, callback_started,
       callback_received_time_sec, reachable.start_index.has_value(), reachable.reachable_count,
-      candidate_count, best_neighbor_count, best_is_stable, approach_ready);
+      candidate_count, best_neighbor_count, best_is_stable, approach_ready,
+      cand_after_reachable, cand_after_visited, cand_after_grasp, visited_cells);
 
     RCLCPP_INFO_THROTTLE(
       this->get_logger(), *this->get_clock(), 1000,

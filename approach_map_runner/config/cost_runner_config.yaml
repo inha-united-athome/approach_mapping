@@ -15,7 +15,7 @@ approach_cost_runner_node:
     robot_start_search_radius_m: 0.30
     min_feasible_cells: 25
     best_neighbor_radius_m: 0.30
-    min_best_neighbor_cells: 5
+    min_best_neighbor_cells: 3
     stable_duration_sec: 0.70
     stable_position_tolerance_m: 0.15
     debug_save_enable: true

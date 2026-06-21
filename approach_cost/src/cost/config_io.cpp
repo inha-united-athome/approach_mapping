@@ -44,6 +44,7 @@ FinalCostConfig loadFinalCostConfigFromYaml(const std::string & yaml_path)
   config.common.weight_target_distance = readRequired<double>(common, "weight_target_distance");
   config.common.weight_stability = readRequired<double>(common, "weight_stability");
   config.common.weight_approach_distance = readRequired<double>(common, "weight_approach_distance");
+  config.common.weight_approach_angle = readRequired<double>(common, "weight_approach_angle");
   config.common.stability_window_radius_cells =
     readRequired<std::size_t>(common, "stability_window_radius_cells");
   config.common.invalid_value = readRequired<float>(common, "invalid_value");

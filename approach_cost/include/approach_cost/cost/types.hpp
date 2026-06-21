@@ -27,6 +27,11 @@ struct CommonCostInput
   approach_map::XYPoint robot_point_m;
   std::vector<uint8_t> candidate_mask;
   std::vector<uint32_t> state_transition_counts;
+
+  /// Unit direction of the object row (objects assumed laid out in a line).
+  /// The preferred approach is perpendicular to this direction.
+  bool has_object_row_dir{false};
+  approach_map::XYPoint object_row_dir{0.0, 0.0};
 };
 
 /**
@@ -37,6 +42,7 @@ struct CommonCostConfig
   double weight_target_distance{1.0};
   double weight_stability{1.0};
   double weight_approach_distance{1.0};
+  double weight_approach_angle{1.0};
   std::size_t stability_window_radius_cells{1};
   float invalid_value{-1.0F};
 };
@@ -58,6 +64,7 @@ struct CommonCostLayers
   approach_map::GridDataF32 target_distance_cost;
   approach_map::GridDataF32 stability_cost;
   approach_map::GridDataF32 approach_distance_cost;
+  approach_map::GridDataF32 approach_angle_cost;
   approach_map::GridDataF32 cost_common;
 };
 

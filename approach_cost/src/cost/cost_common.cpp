@@ -108,6 +108,52 @@ approach_map::GridDataF32 computeApproachDistanceCostInternal(
   return normalizeLayer(input.meta, raw, input, invalid_value);
 }
 
+approach_map::GridDataF32 computeApproachAngleCostInternal(
+  const CommonCostInput & input,
+  float invalid_value)
+{
+  std::vector<float> raw(approach_map::cellCount(input.meta), invalid_value);
+
+  double dir_x = input.object_row_dir.x_m;
+  double dir_y = input.object_row_dir.y_m;
+  const double dir_len = std::hypot(dir_x, dir_y);
+  const bool have_dir = input.has_object_row_dir && dir_len > 1.0e-9;
+  if (have_dir) {
+    dir_x /= dir_len;
+    dir_y /= dir_len;
+  }
+
+  for (std::size_t i = 0; i < raw.size(); ++i) {
+    if (!isCandidate(input, i)) {
+      continue;
+    }
+
+    // Without a known object-row direction the term contributes nothing.
+    if (!have_dir) {
+      raw[i] = 0.0F;
+      continue;
+    }
+
+    const approach_map::XYPoint center = cellCenter(input.meta, i);
+    // Approach heading used downstream is (target - cell); see makeBestCostPose().
+    const double vx = input.target_point_m.x_m - center.x_m;
+    const double vy = input.target_point_m.y_m - center.y_m;
+    const double v_len = std::hypot(vx, vy);
+    if (v_len < 1.0e-9) {
+      raw[i] = 0.0F;  // Cell sits on the target; heading is undefined, treat as ideal.
+      continue;
+    }
+
+    // |cos| between the approach heading and the object row:
+    //   0 -> approaching perpendicular to the row (best)
+    //   1 -> approaching along the row (worst)
+    const double cos_with_row = (vx * dir_x + vy * dir_y) / v_len;
+    raw[i] = static_cast<float>(std::abs(cos_with_row));
+  }
+
+  return normalizeLayer(input.meta, raw, input, invalid_value);
+}
+
 approach_map::GridDataF32 computeStabilityCostInternal(
   const CommonCostInput & input,
   const CommonCostConfig & config)
@@ -163,7 +209,8 @@ approach_map::GridDataF32 combineCommonCosts(
 {
   std::vector<float> combined(approach_map::cellCount(input.meta), config.invalid_value);
   const double total_weight =
-    config.weight_target_distance + config.weight_stability + config.weight_approach_distance;
+    config.weight_target_distance + config.weight_stability +
+    config.weight_approach_distance + config.weight_approach_angle;
 
   for (std::size_t i = 0; i < combined.size(); ++i) {
     if (!isCandidate(input, i)) {
@@ -173,8 +220,11 @@ approach_map::GridDataF32 combineCommonCosts(
     const float target_cost = layers.target_distance_cost.values[i];
     const float stability_cost = layers.stability_cost.values[i];
     const float approach_cost = layers.approach_distance_cost.values[i];
+    const float angle_cost = layers.approach_angle_cost.values[i];
 
-    if (target_cost < 0.0F || stability_cost < 0.0F || approach_cost < 0.0F) {
+    if (target_cost < 0.0F || stability_cost < 0.0F || approach_cost < 0.0F ||
+      angle_cost < 0.0F)
+    {
       continue;
     }
 
@@ -186,7 +236,8 @@ approach_map::GridDataF32 combineCommonCosts(
     combined[i] = static_cast<float>(
       (config.weight_target_distance * target_cost +
        config.weight_stability * stability_cost +
-       config.weight_approach_distance * approach_cost) / total_weight);
+       config.weight_approach_distance * approach_cost +
+       config.weight_approach_angle * angle_cost) / total_weight);
   }
 
   return approach_map::makeGridDataF32(input.meta, std::move(combined));
@@ -204,6 +255,7 @@ CommonCostLayers computeCostCommon(const CommonCostInput & input, const CommonCo
   layers.target_distance_cost = computeTargetDistanceCostInternal(input, config.invalid_value);
   layers.stability_cost = computeStabilityCostInternal(input, config);
   layers.approach_distance_cost = computeApproachDistanceCostInternal(input, config.invalid_value);
+  layers.approach_angle_cost = computeApproachAngleCostInternal(input, config.invalid_value);
   layers.cost_common = combineCommonCosts(layers, input, config);
   return layers;
 }

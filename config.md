@@ -201,5 +201,6 @@ feasible 후보들의 최종 cost 조합 방식을 설정합니다. 각 cost lay
 | `common.weight_target_distance` | `1.0` | target까지 거리가 가까운 후보를 선호하는 가중치입니다. |
 | `common.weight_stability` | `1.0` | 주변 셀 상태 변화가 적은 후보를 선호하는 가중치입니다. |
 | `common.weight_approach_distance` | `1.0` | 현재 로봇 위치에서 가까운 후보를 선호하는 가중치입니다. |
+| `common.weight_approach_angle` | `1.0` | 물체 배열(일렬 가정)에 수직하게 접근하는 후보를 선호하는 가중치입니다. 객체가 2개 미만이면 중립(0)으로 동작합니다. |
 | `common.stability_window_radius_cells` | `1` | 안정성 cost를 계산할 때 주변 상태 변화량을 평균 낼 셀 반경입니다. |
 | `common.invalid_value` | `-1.0` | cost 계산 대상이 아닌 셀에 기록할 값입니다. |

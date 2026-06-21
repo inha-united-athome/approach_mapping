@@ -13,6 +13,7 @@ approach_cost_runner_node:
     transform_timeout_sec: 0.1
     exclude_visited_from_goals: true
     visited_rear_only: true   # only exclude visited cells behind the robot (toward-target corridor kept)
+    grasp_look_at_centroid: true   # mode1: face the grasp-objects midpoint (perpendicular alignment about it)
     grasp_radius_m: 0.9
     robot_start_search_radius_m: 0.20
     min_feasible_cells: 25

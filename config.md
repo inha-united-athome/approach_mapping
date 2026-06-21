@@ -81,6 +81,7 @@
 | 파라미터 | 현재 값 | 의미 |
 | --- | --- | --- |
 | `grasp_radius_m` | `0.9` | grasp target이 있을 때 후보 셀이 grasp 대상에서 떨어질 수 있는 최대 거리입니다. 모든 객체 원의 교집합이 비면 가장 많은 객체에 닿는 셀로 폴백해 후보가 0이 되지 않게 합니다. |
+| `grasp_look_at_centroid` | `true` | 모드1에서 골이 grasp 객체들의 중점을 바라보도록(그 중점 기준 수직 정렬) look-at 기준점을 객체 centroid로 잡습니다. false면 발행된 `target_point`를 그대로 씁니다. |
 | `robot_start_search_radius_m` | `0.30` | 로봇 위치 주변에서 flood fill을 시작할 가장 가까운 feasible 셀을 찾는 반경입니다. |
 | `min_feasible_cells` | `25` | 로봇 위치에서 연결 가능하고 grasp 필터까지 통과한 후보 셀의 최소 개수입니다. |
 | `exclude_visited_from_goals` | `true` | 로봇이 지나온(visited) 셀을 골 후보에서 제외할지 여부입니다. (approach 비용이 골을 로봇 쪽으로 끌기 때문에 anti-chase용) |

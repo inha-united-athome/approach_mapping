@@ -52,6 +52,9 @@ struct CostRunnerConfig
   std::string candidate_arrow_topic{"/approach/candidate_cost_arrow"};
   std::string approach_ready_topic{"/approach/approach_ready"};
   double transform_timeout_sec{0.1};
+  // In mode 1, face the centroid of the grasp objects (the perpendicular alignment is
+  // taken about that midpoint) instead of the possibly-stale published target_point.
+  bool grasp_look_at_centroid{true};
   double grasp_radius_m{0.9};
   double robot_start_search_radius_m{0.30};
   int min_feasible_cells{10};
@@ -94,6 +97,8 @@ CostRunnerConfig loadCostRunnerConfig(rclcpp::Node & node)
     node.declare_parameter("approach_ready_topic", config.approach_ready_topic);
   config.transform_timeout_sec =
     node.declare_parameter("transform_timeout_sec", config.transform_timeout_sec);
+  config.grasp_look_at_centroid =
+    node.declare_parameter("grasp_look_at_centroid", config.grasp_look_at_centroid);
   config.grasp_radius_m = node.declare_parameter("grasp_radius_m", config.grasp_radius_m);
   config.robot_start_search_radius_m = std::max(
     0.0,
@@ -1097,6 +1102,21 @@ private:
       if (const auto row_dir = objectRowDirection(grasp_objects)) {
         input.has_object_row_dir = true;
         input.object_row_dir = row_dir.value();
+      }
+
+      // In mode 1 the grasp objects ARE the target. Look at their centroid so the
+      // goal faces the midpoint and the perpendicular alignment is taken about that
+      // point. The published target_point can be stale here (it is only refreshed
+      // when the map origin is reset), so derive the look-at point from the objects.
+      if (runner_config_.grasp_look_at_centroid) {
+        approach_map::XYPoint centroid{0.0, 0.0};
+        for (const auto & obj : grasp_objects) {
+          centroid.x_m += obj.x_m;
+          centroid.y_m += obj.y_m;
+        }
+        centroid.x_m /= static_cast<double>(grasp_objects.size());
+        centroid.y_m /= static_cast<double>(grasp_objects.size());
+        input.target_point_m = centroid;
       }
     }
     const std::size_t cand_after_grasp = countCandidateCells(input.candidate_mask);

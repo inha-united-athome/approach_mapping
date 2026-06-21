@@ -80,11 +80,13 @@
 
 | 파라미터 | 현재 값 | 의미 |
 | --- | --- | --- |
-| `grasp_radius_m` | `0.9` | grasp target이 있을 때 후보 셀이 grasp 대상에서 떨어질 수 있는 최대 거리입니다. |
+| `grasp_radius_m` | `0.9` | grasp target이 있을 때 후보 셀이 grasp 대상에서 떨어질 수 있는 최대 거리입니다. 모든 객체 원의 교집합이 비면 가장 많은 객체에 닿는 셀로 폴백해 후보가 0이 되지 않게 합니다. |
 | `robot_start_search_radius_m` | `0.30` | 로봇 위치 주변에서 flood fill을 시작할 가장 가까운 feasible 셀을 찾는 반경입니다. |
 | `min_feasible_cells` | `25` | 로봇 위치에서 연결 가능하고 grasp 필터까지 통과한 후보 셀의 최소 개수입니다. |
+| `exclude_visited_from_goals` | `true` | 로봇이 지나온(visited) 셀을 골 후보에서 제외할지 여부입니다. (approach 비용이 골을 로봇 쪽으로 끌기 때문에 anti-chase용) |
+| `visited_rear_only` | `true` | true면 로봇→타겟 방향 기준 **뒤쪽** visited 셀만 제외하고, 앞쪽 접근 코리도어는 유지합니다. false면 visited 전체를 제외합니다. |
 | `best_neighbor_radius_m` | `0.30` | best 후보 주변 밀도를 검사할 반경입니다. |
-| `min_best_neighbor_cells` | `5` | best 후보 주변 반경 안에 있어야 하는 feasible 셀의 최소 개수입니다. |
+| `min_best_neighbor_cells` | `3` | best 후보 주변 반경 안에 있어야 하는 feasible 셀의 최소 개수입니다. |
 | `stable_duration_sec` | `0.70` | best 후보가 충분히 안정적이어야 하는 최소 지속 시간입니다. |
 | `stable_position_tolerance_m` | `0.15` | 안정화 시간 동안 best 후보가 움직일 수 있는 허용 반경입니다. |
 

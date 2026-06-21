@@ -40,6 +40,9 @@ struct CostRunnerConfig
   std::string transition_map_topic{"transition_count_map"};
   std::string visited_map_topic{"/approach/visited_map"};
   bool exclude_visited_from_goals{true};
+  // When true, only visited cells behind the robot (relative to the robot->target
+  // approach direction) are excluded, keeping the forward approach corridor intact.
+  bool visited_rear_only{true};
   std::string target_point_topic{"/approach/target_point"};
   std::string grasp_targets_topic{"/approach/grasp_targets"};
   std::string grasp_status_topic{"/approach/grasp_status"};
@@ -73,6 +76,8 @@ CostRunnerConfig loadCostRunnerConfig(rclcpp::Node & node)
     node.declare_parameter("visited_map_topic", config.visited_map_topic);
   config.exclude_visited_from_goals =
     node.declare_parameter("exclude_visited_from_goals", config.exclude_visited_from_goals);
+  config.visited_rear_only =
+    node.declare_parameter("visited_rear_only", config.visited_rear_only);
   config.target_point_topic =
     node.declare_parameter("target_point_topic", config.target_point_topic);
   config.grasp_targets_topic =
@@ -1039,14 +1044,34 @@ private:
 
     // Visited (robot-traversed) cells keep BFS connectivity above, but they must not
     // become goal candidates themselves — otherwise the goal collapses onto the robot
-    // trail and chases the robot.
+    // trail and chases the robot (the approach-distance term pulls it toward the robot).
+    //
+    // visited_rear_only: exclude only visited cells in the rear half-plane (behind the
+    // robot relative to the robot->target direction). This keeps anti-chase for the trail
+    // already passed while leaving the forward approach corridor — where the goal lives —
+    // un-eroded. Falls back to excluding all visited cells when the approach direction is
+    // undefined (robot sitting on the target).
     if (runner_config_.exclude_visited_from_goals && latest_visited_map_.has_value()) {
       if (haveMatchingGridGeometry(*msg, latest_visited_map_.value())) {
         const auto & visited = latest_visited_map_.value().data;
+        const double approach_dx = input.target_point_m.x_m - robot_point.x_m;
+        const double approach_dy = input.target_point_m.y_m - robot_point.y_m;
+        const bool rear_only = runner_config_.visited_rear_only &&
+          std::hypot(approach_dx, approach_dy) > 1.0e-6;
         for (std::size_t i = 0; i < input.candidate_mask.size(); ++i) {
-          if (i < visited.size() && visited[i] > 0) {
-            input.candidate_mask[i] = 0U;
+          if (i >= visited.size() || visited[i] == 0) {
+            continue;
           }
+          if (rear_only) {
+            const auto center = cellCenter(input.meta, i);
+            const double rel_x = center.x_m - robot_point.x_m;
+            const double rel_y = center.y_m - robot_point.y_m;
+            // Keep cells toward the target (dot > 0); only drop those behind the robot.
+            if (approach_dx * rel_x + approach_dy * rel_y > 0.0) {
+              continue;
+            }
+          }
+          input.candidate_mask[i] = 0U;
         }
       } else {
         RCLCPP_WARN_THROTTLE(

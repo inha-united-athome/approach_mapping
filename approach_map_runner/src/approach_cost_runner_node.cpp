@@ -22,6 +22,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/header.hpp>
+#include <std_msgs/msg/int32.hpp>
 #include <tf2/exceptions.h>
 #include <tf2/time.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -46,6 +47,9 @@ struct CostRunnerConfig
   bool visited_rear_only{true};
   std::string target_point_topic{"/approach/target_point"};
   std::string grasp_targets_topic{"/approach/grasp_targets"};
+  // Active cost mode published by the runner service (1 = perpendicular-to-row,
+  // 3 = locked to robot front frozen at service time). Overrides the static yaml mode.
+  std::string cost_mode_topic{"/approach/cost_mode"};
   std::string grasp_status_topic{"/approach/grasp_status"};
   std::string robot_frame_id{"base_nav"};
   std::string output_topic{"final_cost_map"};
@@ -86,6 +90,8 @@ CostRunnerConfig loadCostRunnerConfig(rclcpp::Node & node)
     node.declare_parameter("target_point_topic", config.target_point_topic);
   config.grasp_targets_topic =
     node.declare_parameter("grasp_targets_topic", config.grasp_targets_topic);
+  config.cost_mode_topic =
+    node.declare_parameter("cost_mode_topic", config.cost_mode_topic);
   config.grasp_status_topic =
     node.declare_parameter("grasp_status_topic", config.grasp_status_topic);
   config.robot_frame_id =
@@ -581,6 +587,7 @@ public:
     }
 
     cost_config_ = approach_cost::loadFinalCostConfigFromYaml(cost_config_path);
+    active_mode_ = cost_config_.mode;
     runner_config_ = loadCostRunnerConfig(*this);
 
     tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
@@ -617,6 +624,13 @@ public:
     grasp_targets_sub_ = this->create_subscription<geometry_msgs::msg::PoseArray>(
       runner_config_.grasp_targets_topic, grasp_targets_qos,
       std::bind(&ApproachCostRunnerNode::graspTargetsCallback, this, std::placeholders::_1));
+
+    auto cost_mode_qos = rclcpp::QoS(rclcpp::KeepLast(1));
+    cost_mode_qos.reliable();
+    cost_mode_qos.transient_local();
+    cost_mode_sub_ = this->create_subscription<std_msgs::msg::Int32>(
+      runner_config_.cost_mode_topic, cost_mode_qos,
+      std::bind(&ApproachCostRunnerNode::costModeCallback, this, std::placeholders::_1));
 
     feasible_map_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
       runner_config_.feasible_map_topic, 10,
@@ -992,6 +1006,21 @@ private:
       msg->poses.size(), runner_config_.grasp_targets_topic.c_str());
   }
 
+  // Runtime cost-mode switch driven by the runner service. Mode 3 re-freezes the
+  // approach front (captured on the next feasible-map frame), tying the freeze to the
+  // service call. Unknown values fall back to Mode1.
+  void costModeCallback(const std_msgs::msg::Int32::SharedPtr msg)
+  {
+    const auto mode = (msg->data == 3) ? approach_cost::ModeId::Mode3
+      : approach_cost::ModeId::Mode1;
+    active_mode_ = mode;
+    if (mode == approach_cost::ModeId::Mode3) {
+      frozen_front_dir_.reset();
+      front_capture_pending_ = true;
+    }
+    RCLCPP_INFO(this->get_logger(), "Cost mode set to %d", static_cast<int>(msg->data));
+  }
+
   std::vector<approach_map::XYPoint> graspObjectsInFrame(const std::string & target_frame)
   {
     std::vector<approach_map::XYPoint> objects;
@@ -1112,7 +1141,7 @@ private:
     // Mode3: freeze the robot heading once per service request. "정면" (front) is assumed
     // to point at the objects at this instant, so the captured direction is the locked
     // approach axis for the whole approach.
-    if (cost_config_.mode == approach_cost::ModeId::Mode3 && front_capture_pending_) {
+    if (active_mode_ == approach_cost::ModeId::Mode3 && front_capture_pending_) {
       approach_map::XYPoint front_dir;
       if (lookupRobotFrontDir(map_frame, robot_point, front_dir)) {
         frozen_front_dir_ = front_dir;
@@ -1201,7 +1230,7 @@ private:
         static_cast<uint32_t>(grasp_objects.size()), reach.reachable_count);
 
       const bool mode3_active =
-        cost_config_.mode == approach_cost::ModeId::Mode3 && frozen_front_dir_.has_value();
+        active_mode_ == approach_cost::ModeId::Mode3 && frozen_front_dir_.has_value();
       if (mode3_active) {
         applyMode3RowAndTarget(grasp_objects, robot_point, input);
       } else {
@@ -1310,6 +1339,9 @@ private:
   std::optional<geometry_msgs::msg::PoseArray> latest_grasp_targets_;
   std::optional<approach_map::XYPoint> stable_best_point_;
   std::optional<rclcpp::Time> stable_since_;
+  // Active cost mode, driven at runtime by the runner service (cost_mode topic). Defaults
+  // to the static yaml mode until the first cost_mode message arrives.
+  approach_cost::ModeId active_mode_{approach_cost::ModeId::Mode1};
   // Mode3: robot heading (unit vector, map frame) frozen at service time. The approach
   // direction is locked to this so it does not drift as the robot rotates while driving.
   std::optional<approach_map::XYPoint> frozen_front_dir_;
@@ -1327,6 +1359,7 @@ private:
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr transition_map_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr visited_map_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr grasp_targets_sub_;
+  rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr cost_mode_sub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr final_cost_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr best_arrow_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr candidate_arrow_pub_;

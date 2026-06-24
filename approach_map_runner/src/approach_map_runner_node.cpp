@@ -17,6 +17,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <std_msgs/msg/header.hpp>
+#include <std_msgs/msg/int32.hpp>
 #include <tf2/exceptions.h>
 #include <tf2/time.h>
 #include <tf2/utils.h>
@@ -37,6 +38,9 @@ struct RunnerConfig
   std::string input_cloud_topic{"/approach/accumulated_cloud"};
   std::string target_point_topic{"/approach/target_point"};
   std::string grasp_targets_topic{"/approach/grasp_targets"};
+  // Latched topic carrying the active cost mode (1 = perpendicular-to-row, 3 = locked to
+  // robot front frozen at service time) so the cost node can switch behavior at runtime.
+  std::string cost_mode_topic{"/approach/cost_mode"};
   std::string mapping_service_name{"approach_mapping"};
   std::string map_frame_id{"map"};
   std::string obstacle_map_topic{"/approach/obstacle_map"};
@@ -99,6 +103,8 @@ RunnerConfig loadRunnerConfig(rclcpp::Node & node)
     node.declare_parameter("target_point_topic", config.target_point_topic);
   config.grasp_targets_topic =
     node.declare_parameter("grasp_targets_topic", config.grasp_targets_topic);
+  config.cost_mode_topic =
+    node.declare_parameter("cost_mode_topic", config.cost_mode_topic);
   config.mapping_service_name =
     node.declare_parameter("mapping_service_name", config.mapping_service_name);
   config.map_frame_id = node.declare_parameter("map_frame_id", config.map_frame_id);
@@ -436,6 +442,8 @@ public:
       runner_config_.target_point_topic, target_point_qos);
     grasp_targets_pub_ = this->create_publisher<geometry_msgs::msg::PoseArray>(
       runner_config_.grasp_targets_topic, target_point_qos);
+    cost_mode_pub_ = this->create_publisher<std_msgs::msg::Int32>(
+      runner_config_.cost_mode_topic, target_point_qos);
     mapping_service_ = this->create_service<MappingControl>(
       runner_config_.mapping_service_name,
       std::bind(
@@ -499,6 +507,13 @@ private:
     grasp_targets_pub_->publish(msg);
   }
 
+  void publishCostMode(int mode)
+  {
+    std_msgs::msg::Int32 msg;
+    msg.data = mode;
+    cost_mode_pub_->publish(msg);
+  }
+
    void resetOriginFromTarget(double x_m, double y_m)
   {
     const approach_map::Origin origin{
@@ -540,10 +555,12 @@ private:
       return;
     }
 
-    if (request->mode != 0 && request->mode != 1 && request->mode != 2) {
+    if (request->mode != 0 && request->mode != 1 && request->mode != 2 &&
+      request->mode != 3)
+    {
       RCLCPP_WARN(
         this->get_logger(),
-        "Unsupported mapping mode: %d. Only mode 0, 1 and 2 are implemented.",
+        "Unsupported mapping mode: %d. Only mode 0, 1, 2 and 3 are implemented.",
         request->mode);
       response->success = false;
       return;
@@ -567,6 +584,79 @@ private:
       return;
     }
 
+    if (request->mode == 3) {
+      if (!mapping_enabled_) {
+        RCLCPP_WARN(
+          this->get_logger(),
+          "Mode 3 requires active mapping (call mode 0 first).");
+        response->success = false;
+        return;
+      }
+
+      // Mode 3 always carries exactly two grasp objects: size 4 = (x,y,x,y) [2D],
+      // size 6 = (x,y,z,x,y,z) [3D, z ignored for the 2D cost map]. Anything else
+      // is malformed and rejected.
+      const std::size_t stride = (request->target.size() == 6U) ? 3U
+        : (request->target.size() == 4U) ? 2U : 0U;
+      if (stride == 0U) {
+        RCLCPP_WARN(
+          this->get_logger(),
+          "Mode 3 requires two objects as (x,y,x,y) [size 4] or (x,y,z,x,y,z) [size 6], "
+          "but received %zu values.",
+          request->target.size());
+        response->success = false;
+        return;
+      }
+
+      std::vector<std::pair<double, double>> grasp_objects;
+      grasp_objects.reserve(2U);
+      for (std::size_t i = 0; i < 2U; ++i) {
+        const double ox = static_cast<double>(request->target[stride * i]);
+        const double oy = static_cast<double>(request->target[1U + stride * i]);
+        if (!std::isfinite(ox) || !std::isfinite(oy)) {
+          RCLCPP_WARN(
+            this->get_logger(), "Mode 3 grasp object %zu has non-finite coordinates.", i);
+          response->success = false;
+          return;
+        }
+        grasp_objects.emplace_back(ox, oy);
+      }
+
+      const double object_center_x_m = 0.5 * (grasp_objects[0].first + grasp_objects[1].first);
+      const double object_center_y_m = 0.5 * (grasp_objects[0].second + grasp_objects[1].second);
+
+      const auto map_origin = builder_->origin();
+      const double map_center_x_m = map_origin.x_m + 0.5 * map_config_.width_m;
+      const double map_center_y_m = map_origin.y_m + 0.5 * map_config_.height_m;
+      const double center_distance_m = std::hypot(
+        object_center_x_m - map_center_x_m,
+        object_center_y_m - map_center_y_m);
+      const bool forced_mode0 =
+        center_distance_m > runner_config_.mode1_origin_reset_threshold_m;
+
+      if (forced_mode0) {
+        resetOriginFromTarget(object_center_x_m, object_center_y_m);
+        publishTargetPoint(object_center_x_m, object_center_y_m);
+      } else if (!last_published_target_.has_value()) {
+        RCLCPP_WARN(
+          this->get_logger(),
+          "Mode 3 has no previously published reference target. Call mode 0 first.");
+        response->success = false;
+        return;
+      }
+
+      publishGraspTargets(grasp_objects);
+      publishCostMode(3);
+
+      RCLCPP_INFO(
+        this->get_logger(),
+        "Mode 3: 2 grasp objects, object_center=(%.3f, %.3f) forced_mode0=%s "
+        "(approach locked to robot front frozen at this service call).",
+        object_center_x_m, object_center_y_m, forced_mode0 ? "yes" : "no");
+      response->success = true;
+      return;
+    }
+
     if (request->mode == 2) {
       if (!mapping_enabled_) {
         RCLCPP_WARN(
@@ -579,6 +669,7 @@ private:
       shiftOriginFromTargetPreserveMap(target_x_m, target_y_m);
       publishTargetPoint(target_x_m, target_y_m);
       publishGraspTargets({});
+      publishCostMode(1);
 
       RCLCPP_INFO(
         this->get_logger(),
@@ -653,6 +744,7 @@ private:
       }
 
       publishGraspTargets(grasp_objects);
+      publishCostMode(1);
 
       RCLCPP_INFO(
         this->get_logger(),
@@ -668,6 +760,7 @@ private:
     resetOriginFromTarget(target_x_m, target_y_m);
     publishTargetPoint(target_x_m, target_y_m);
     publishGraspTargets({});
+    publishCostMode(1);
     mapping_enabled_ = true;
 
     RCLCPP_INFO(
@@ -986,6 +1079,7 @@ private:
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr visited_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr target_point_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr grasp_targets_pub_;
+  rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr cost_mode_pub_;
   rclcpp::Service<MappingControl>::SharedPtr mapping_service_;
 };
 

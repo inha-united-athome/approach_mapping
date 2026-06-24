@@ -1,5 +1,5 @@
 cost:
-  mode: 1   # 1: approach perpendicular to object line; 3: approach locked to robot front frozen at service time
+  mode: 1
   common:
     weight_target_distance: 1.0
     weight_stability: 1.0

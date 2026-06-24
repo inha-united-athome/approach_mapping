@@ -26,6 +26,8 @@ ModeId readMode(const YAML::Node & node)
   switch (mode_value) {
     case 1:
       return ModeId::Mode1;
+    case 3:
+      return ModeId::Mode3;
     default:
       throw std::runtime_error("Unsupported cost mode: " + std::to_string(mode_value));
   }

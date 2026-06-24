@@ -200,7 +200,7 @@ feasible 후보들의 최종 cost 조합 방식을 설정합니다. 각 cost lay
 
 | 파라미터 | 현재 값 | 의미 |
 | --- | --- | --- |
-| `mode` | `1` | 최종 cost 계산 방식입니다. 현재 cost 모듈은 mode 1만 지원합니다. |
+| `mode` | `1` | 최종 cost 계산 방식입니다. `1`=물체 일렬 가정, 두 물체를 잇는 선의 수직으로 접근. `3`=서비스(새 target_point) 시점의 로봇 정면(heading)을 고정 기준축으로 얼려, 그 정면으로만 접근. mode3는 각 객체의 lateral 좌표를 가장 가까운 객체 기준선으로 snap해 두 물체를 접근 중심선 위에 정렬합니다(정면은 그 순간 객체를 향한다고 가정). |
 | `common.weight_target_distance` | `1.0` | target까지 거리가 가까운 후보를 선호하는 가중치입니다. |
 | `common.weight_stability` | `1.0` | 주변 셀 상태 변화가 적은 후보를 선호하는 가중치입니다. |
 | `common.weight_approach_distance` | `1.0` | 현재 로봇 위치에서 가까운 후보를 선호하는 가중치입니다. |

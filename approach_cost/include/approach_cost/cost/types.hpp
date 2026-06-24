@@ -15,6 +15,9 @@ namespace approach_cost
 enum class ModeId : uint8_t
 {
   Mode1 = 1,
+  // Like Mode1, but the approach direction is locked to the robot's heading captured
+  // at service time (a frozen reference frame). See approach_cost_runner_node.cpp.
+  Mode3 = 3,
 };
 
 /**

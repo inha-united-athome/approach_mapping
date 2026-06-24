@@ -11,6 +11,9 @@ approach_map::GridDataF32 computeFinalCost(
 {
   switch (config.mode) {
     case ModeId::Mode1:
+    case ModeId::Mode3:
+      // Mode3 differs only in how the runner derives object_row_dir / target_point
+      // (frozen robot-front frame); the cost composition itself is identical.
       return common_layers.cost_common;
     default:
       throw std::runtime_error("Unsupported final cost mode");

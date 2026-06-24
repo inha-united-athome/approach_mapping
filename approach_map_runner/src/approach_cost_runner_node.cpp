@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <ctime>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -371,6 +372,19 @@ std::string zeroPaddedNumber(uint64_t value, int width)
   return stream.str();
 }
 
+// Wall-clock timestamp in KST (UTC+9), formatted YYYY-MM-DD_HH-MM-SS for use in
+// filesystem paths. KST has no DST, so a fixed +9h offset on UTC is exact.
+std::string kstTimestamp(std::chrono::system_clock::time_point tp)
+{
+  const std::time_t kst_time =
+    std::chrono::system_clock::to_time_t(tp) + 9 * 60 * 60;
+  std::tm tm_utc{};
+  gmtime_r(&kst_time, &tm_utc);
+  std::ostringstream stream;
+  stream << std::put_time(&tm_utc, "%Y-%m-%d_%H-%M-%S");
+  return stream.str();
+}
+
 bool writeGridPgm(
   const std::filesystem::path & path,
   const nav_msgs::msg::OccupancyGrid & grid)
@@ -704,6 +718,34 @@ private:
     return true;
   }
 
+  // Robot heading (+x of robot_frame) as a unit vector in target_frame, obtained by
+  // transforming the robot-frame point (1, 0) and subtracting the robot origin.
+  bool lookupRobotFrontDir(
+    const std::string & target_frame,
+    const approach_map::XYPoint & robot_origin,
+    approach_map::XYPoint & front_dir)
+  {
+    geometry_msgs::msg::PointStamped ahead;
+    ahead.header.frame_id = runner_config_.robot_frame_id;
+    ahead.point.x = 1.0;
+    ahead.point.y = 0.0;
+    ahead.point.z = 0.0;
+
+    geometry_msgs::msg::PointStamped ahead_in_target;
+    if (!transformPoint(ahead, target_frame, ahead_in_target, "robot heading", true)) {
+      return false;
+    }
+
+    const double dx = ahead_in_target.point.x - robot_origin.x_m;
+    const double dy = ahead_in_target.point.y - robot_origin.y_m;
+    const double len = std::hypot(dx, dy);
+    if (len < 1.0e-6) {
+      return false;
+    }
+    front_dir = approach_map::XYPoint{dx / len, dy / len};
+    return true;
+  }
+
   void publishApproachReady(bool ready)
   {
     std_msgs::msg::Bool msg;
@@ -761,11 +803,9 @@ private:
     debug_saved_snapshot_count_ = 0U;
     ++debug_session_index_;
 
-    const auto epoch_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
     const std::string directory_name =
-      "session_" + zeroPaddedNumber(debug_session_index_, 4) + "_" +
-      std::to_string(epoch_ms);
+      kstTimestamp(std::chrono::system_clock::now()) + "_session_" +
+      zeroPaddedNumber(debug_session_index_, 4);
     debug_session_dir_ = std::filesystem::path(runner_config_.debug_output_dir) / directory_name;
 
     try {
@@ -924,6 +964,10 @@ private:
     latest_target_point_ = *msg;
     resetBestStability();
     publishApproachReady(false);
+    // Mode3: a new service request re-freezes the approach reference frame. The robot
+    // heading is captured on the next feasible-map frame (where map_frame and TF are known).
+    frozen_front_dir_.reset();
+    front_capture_pending_ = true;
     startDebugSession(*msg);
     RCLCPP_INFO(
       this->get_logger(), "Updated cost target point from topic %s",
@@ -983,6 +1027,51 @@ private:
     grasp_status_pub_->publish(msg);
   }
 
+  // Mode3: lock the approach to the frozen robot-front axis. The object row is forced
+  // perpendicular to that axis (so the robot drives straight in along its front), and
+  // every object's lateral offset is snapped onto the nearest object's lateral line so
+  // both objects sit on the single approach centerline. Requires frozen_front_dir_.
+  void applyMode3RowAndTarget(
+    const std::vector<approach_map::XYPoint> & grasp_objects,
+    const approach_map::XYPoint & robot_point,
+    approach_cost::CommonCostInput & input)
+  {
+    const approach_map::XYPoint front = frozen_front_dir_.value();
+    // Lateral axis (perpendicular to front). The object row is declared to lie along
+    // this, which makes the perpendicular-approach reward pull the goal along front.
+    const approach_map::XYPoint lateral{-front.y_m, front.x_m};
+    input.has_object_row_dir = true;
+    input.object_row_dir = lateral;
+
+    auto forwardDepth = [&](const approach_map::XYPoint & p) {
+      return (p.x_m - robot_point.x_m) * front.x_m + (p.y_m - robot_point.y_m) * front.y_m;
+    };
+    auto lateralCoord = [&](const approach_map::XYPoint & p) {
+      return p.x_m * lateral.x_m + p.y_m * lateral.y_m;
+    };
+
+    // Nearest object along the approach front; its lateral line is the snap target.
+    std::size_t near_idx = 0;
+    for (std::size_t i = 1; i < grasp_objects.size(); ++i) {
+      if (forwardDepth(grasp_objects[i]) < forwardDepth(grasp_objects[near_idx])) {
+        near_idx = i;
+      }
+    }
+    const double near_lat = lateralCoord(grasp_objects[near_idx]);
+
+    // Snap each object onto the nearest object's lateral line, then take the centroid
+    // of the snapped objects as the look-at target.
+    approach_map::XYPoint centroid{0.0, 0.0};
+    for (const auto & obj : grasp_objects) {
+      const double shift = near_lat - lateralCoord(obj);
+      centroid.x_m += obj.x_m + shift * lateral.x_m;
+      centroid.y_m += obj.y_m + shift * lateral.y_m;
+    }
+    centroid.x_m /= static_cast<double>(grasp_objects.size());
+    centroid.y_m /= static_cast<double>(grasp_objects.size());
+    input.target_point_m = centroid;
+  }
+
   void feasibleMapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
   {
     const auto callback_started = std::chrono::steady_clock::now();
@@ -1018,6 +1107,20 @@ private:
     if (!lookupRobotPoint(map_frame, msg->header.stamp, robot_point)) {
       invalidateApproachReadiness();
       return;
+    }
+
+    // Mode3: freeze the robot heading once per service request. "정면" (front) is assumed
+    // to point at the objects at this instant, so the captured direction is the locked
+    // approach axis for the whole approach.
+    if (cost_config_.mode == approach_cost::ModeId::Mode3 && front_capture_pending_) {
+      approach_map::XYPoint front_dir;
+      if (lookupRobotFrontDir(map_frame, robot_point, front_dir)) {
+        frozen_front_dir_ = front_dir;
+        front_capture_pending_ = false;
+        RCLCPP_INFO(
+          this->get_logger(), "Mode3: froze approach front dir (%.3f, %.3f) in %s",
+          front_dir.x_m, front_dir.y_m, map_frame.c_str());
+      }
     }
 
     approach_cost::CommonCostInput input;
@@ -1097,26 +1200,32 @@ private:
         msg->header, reach.status,
         static_cast<uint32_t>(grasp_objects.size()), reach.reachable_count);
 
-      // Prefer approaching perpendicular to the object row so the downstream
-      // fine-alignment does not have to twist the robot toward the table.
-      if (const auto row_dir = objectRowDirection(grasp_objects)) {
-        input.has_object_row_dir = true;
-        input.object_row_dir = row_dir.value();
-      }
-
-      // In mode 1 the grasp objects ARE the target. Look at their centroid so the
-      // goal faces the midpoint and the perpendicular alignment is taken about that
-      // point. The published target_point can be stale here (it is only refreshed
-      // when the map origin is reset), so derive the look-at point from the objects.
-      if (runner_config_.grasp_look_at_centroid) {
-        approach_map::XYPoint centroid{0.0, 0.0};
-        for (const auto & obj : grasp_objects) {
-          centroid.x_m += obj.x_m;
-          centroid.y_m += obj.y_m;
+      const bool mode3_active =
+        cost_config_.mode == approach_cost::ModeId::Mode3 && frozen_front_dir_.has_value();
+      if (mode3_active) {
+        applyMode3RowAndTarget(grasp_objects, robot_point, input);
+      } else {
+        // Mode1: approach perpendicular to the object row so the downstream
+        // fine-alignment does not have to twist the robot toward the table.
+        if (const auto row_dir = objectRowDirection(grasp_objects)) {
+          input.has_object_row_dir = true;
+          input.object_row_dir = row_dir.value();
         }
-        centroid.x_m /= static_cast<double>(grasp_objects.size());
-        centroid.y_m /= static_cast<double>(grasp_objects.size());
-        input.target_point_m = centroid;
+
+        // The grasp objects ARE the target. Look at their centroid so the goal faces
+        // the midpoint and the perpendicular alignment is taken about that point. The
+        // published target_point can be stale here (it is only refreshed when the map
+        // origin is reset), so derive the look-at point from the objects.
+        if (runner_config_.grasp_look_at_centroid) {
+          approach_map::XYPoint centroid{0.0, 0.0};
+          for (const auto & obj : grasp_objects) {
+            centroid.x_m += obj.x_m;
+            centroid.y_m += obj.y_m;
+          }
+          centroid.x_m /= static_cast<double>(grasp_objects.size());
+          centroid.y_m /= static_cast<double>(grasp_objects.size());
+          input.target_point_m = centroid;
+        }
       }
     }
     const std::size_t cand_after_grasp = countCandidateCells(input.candidate_mask);
@@ -1201,6 +1310,10 @@ private:
   std::optional<geometry_msgs::msg::PoseArray> latest_grasp_targets_;
   std::optional<approach_map::XYPoint> stable_best_point_;
   std::optional<rclcpp::Time> stable_since_;
+  // Mode3: robot heading (unit vector, map frame) frozen at service time. The approach
+  // direction is locked to this so it does not drift as the robot rotates while driving.
+  std::optional<approach_map::XYPoint> frozen_front_dir_;
+  bool front_capture_pending_{false};
   std::filesystem::path debug_session_dir_;
   std::ofstream debug_csv_;
   bool debug_session_ready_{false};

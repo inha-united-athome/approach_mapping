@@ -38,8 +38,9 @@ struct RunnerConfig
   std::string input_cloud_topic{"/approach/accumulated_cloud"};
   std::string target_point_topic{"/approach/target_point"};
   std::string grasp_targets_topic{"/approach/grasp_targets"};
-  // Latched topic carrying the active cost mode (1 = perpendicular-to-row, 3 = locked to
-  // robot front frozen at service time) so the cost node can switch behavior at runtime.
+  // Latched topic carrying the active cost mode (1 = go straight to the grasp
+  // intersection, 3 = locked to robot front frozen at service time) so the cost node
+  // can switch behavior at runtime.
   std::string cost_mode_topic{"/approach/cost_mode"};
   std::string mapping_service_name{"approach_mapping"};
   std::string map_frame_id{"map"};

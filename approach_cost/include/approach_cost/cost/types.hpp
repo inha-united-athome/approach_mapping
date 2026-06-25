@@ -14,9 +14,13 @@ namespace approach_cost
  */
 enum class ModeId : uint8_t
 {
+  // Go straight to the grasp intersection: candidates are restricted to the cells
+  // within reach of every object and the goal is the best-cost cell there, with no
+  // approach-direction preference.
   Mode1 = 1,
-  // Like Mode1, but the approach direction is locked to the robot's heading captured
-  // at service time (a frozen reference frame). See approach_cost_runner_node.cpp.
+  // The approach direction is locked to the robot's heading captured at service time
+  // (a frozen reference frame), so the robot drives straight in along its front. See
+  // approach_cost_runner_node.cpp.
   Mode3 = 3,
 };
 

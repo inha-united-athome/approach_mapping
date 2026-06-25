@@ -47,8 +47,9 @@ struct CostRunnerConfig
   bool visited_rear_only{true};
   std::string target_point_topic{"/approach/target_point"};
   std::string grasp_targets_topic{"/approach/grasp_targets"};
-  // Active cost mode published by the runner service (1 = perpendicular-to-row,
-  // 3 = locked to robot front frozen at service time). Overrides the static yaml mode.
+  // Active cost mode published by the runner service (1 = go straight to the grasp
+  // intersection, 3 = locked to robot front frozen at service time). Overrides the
+  // static yaml mode.
   std::string cost_mode_topic{"/approach/cost_mode"};
   std::string grasp_status_topic{"/approach/grasp_status"};
   std::string robot_frame_id{"base_nav"};
@@ -57,8 +58,8 @@ struct CostRunnerConfig
   std::string candidate_arrow_topic{"/approach/candidate_cost_arrow"};
   std::string approach_ready_topic{"/approach/approach_ready"};
   double transform_timeout_sec{0.1};
-  // In mode 1, face the centroid of the grasp objects (the perpendicular alignment is
-  // taken about that midpoint) instead of the possibly-stale published target_point.
+  // In mode 1, face the centroid of the grasp objects instead of the possibly-stale
+  // published target_point so the goal pose looks at the objects.
   bool grasp_look_at_centroid{true};
   double grasp_radius_m{0.9};
   double robot_start_search_radius_m{0.30};
@@ -490,68 +491,6 @@ GraspReachResult computeGraspReach(
   }
 
   return result;
-}
-
-// Estimate the dominant line direction of the grasp objects (assumed laid out in
-// a row) via the principal axis of their 2D distribution. Returns a unit vector,
-// or nullopt when fewer than two objects make the direction undefined.
-std::optional<approach_map::XYPoint> objectRowDirection(
-  const std::vector<approach_map::XYPoint> & objects)
-{
-  if (objects.size() < 2) {
-    return std::nullopt;
-  }
-
-  double mean_x = 0.0;
-  double mean_y = 0.0;
-  for (const auto & o : objects) {
-    mean_x += o.x_m;
-    mean_y += o.y_m;
-  }
-  mean_x /= static_cast<double>(objects.size());
-  mean_y /= static_cast<double>(objects.size());
-
-  double cxx = 0.0;
-  double cyy = 0.0;
-  double cxy = 0.0;
-  for (const auto & o : objects) {
-    const double dx = o.x_m - mean_x;
-    const double dy = o.y_m - mean_y;
-    cxx += dx * dx;
-    cyy += dy * dy;
-    cxy += dx * dy;
-  }
-
-  if (cxx + cyy < 1.0e-12) {
-    return std::nullopt;  // Objects coincide; no usable direction.
-  }
-
-  const double trace = cxx + cyy;
-  const double det = cxx * cyy - cxy * cxy;
-  const double disc = std::sqrt(std::max(0.0, trace * trace / 4.0 - det));
-  const double lambda = trace / 2.0 + disc;  // Largest eigenvalue.
-
-  double ex = 0.0;
-  double ey = 0.0;
-  if (std::abs(cxy) > 1.0e-12) {
-    ex = cxy;
-    ey = lambda - cxx;
-  } else {
-    // Axis-aligned spread: pick the axis with the larger variance.
-    if (cxx >= cyy) {
-      ex = 1.0;
-      ey = 0.0;
-    } else {
-      ex = 0.0;
-      ey = 1.0;
-    }
-  }
-
-  const double len = std::hypot(ex, ey);
-  if (len < 1.0e-12) {
-    return std::nullopt;  // Objects coincide; no usable direction.
-  }
-  return approach_map::XYPoint{ex / len, ey / len};
 }
 
 geometry_msgs::msg::PoseStamped makeBestCostPose(
@@ -1234,17 +1173,16 @@ private:
       if (mode3_active) {
         applyMode3RowAndTarget(grasp_objects, robot_point, input);
       } else {
-        // Mode1: approach perpendicular to the object row so the downstream
-        // fine-alignment does not have to twist the robot toward the table.
-        if (const auto row_dir = objectRowDirection(grasp_objects)) {
-          input.has_object_row_dir = true;
-          input.object_row_dir = row_dir.value();
-        }
+        // Mode1 (old "go straight to the intersection" behavior): no perpendicular-
+        // to-row preference. Candidates are already restricted to the grasp
+        // intersection above, so the goal is just the best-cost cell within it
+        // (closest / most stable). The approach-angle term stays inert here because
+        // has_object_row_dir is left false, so it contributes nothing to selection.
 
         // The grasp objects ARE the target. Look at their centroid so the goal faces
-        // the midpoint and the perpendicular alignment is taken about that point. The
-        // published target_point can be stale here (it is only refreshed when the map
-        // origin is reset), so derive the look-at point from the objects.
+        // the midpoint. The published target_point can be stale here (it is only
+        // refreshed when the map origin is reset), so derive the look-at point from
+        // the objects.
         if (runner_config_.grasp_look_at_centroid) {
           approach_map::XYPoint centroid{0.0, 0.0};
           for (const auto & obj : grasp_objects) {

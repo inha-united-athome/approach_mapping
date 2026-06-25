@@ -15,12 +15,13 @@
 정규화는 candidate 셀만 대상으로 수행한다.
 
 ### 접근각 비용 (approach_angle)
-각 후보 셀의 접근 방향 `target - cell` 이 물체 배열의 주축(`object_row_dir`)과 이루는 각을 본다.
-원시값은 `|cos|`(0 = 배열과 수직 = 최적, 1 = 배열과 평행 = 최악)이며, 다른 항과 동일하게 정규화한다.
-`object_row_dir` 은 grasp 객체들의 2D 분포 주성분(PCA)으로 추정하며, 객체가 2개 미만이거나
-한 점에 모이면 이 항은 0(중립)으로 동작한다. 부호(앞/뒤)는 보지 않으므로 접근 면 선택은
-feasible/교집합 마스크가 담당한다.
+각 후보 셀의 접근 방향 `target - cell` 이 `object_row_dir` 와 이루는 각을 본다.
+원시값은 `|cos|`(0 = 수직 = 최적, 1 = 평행 = 최악)이며, 다른 항과 동일하게 정규화한다.
+이 항은 `has_object_row_dir` 가 true 일 때만 의미를 가진다. 현재 **Mode3** 만 runner 에서
+`object_row_dir`(로봇 정면에 고정된 측면축)을 설정하므로 이 항이 동작한다. **Mode1** 은
+`object_row_dir` 를 설정하지 않아 이 항이 0(중립)으로 동작하고, 결과적으로 교집합 마스크 안의
+가장 비용이 낮은 셀(가까움/안정)로 곧장 향한다.
 
 ## compute_final_cost
-현재 Mode1에서는 `cost_common`을 그대로 최종 비용으로 사용한다.
-추후 다른 모드가 추가되면 `compute_final_cost()`에서 mode별 추가 항을 더하는 구조로 확장한다.
+Mode1·Mode3 모두 `cost_common`을 그대로 최종 비용으로 사용한다. 두 모드의 차이는 runner 가
+`object_row_dir`/`target_point`를 어떻게 정하느냐에만 있다(Mode1: 교집합 직진, Mode3: 정면 고정).

@@ -6,6 +6,8 @@
 
 `approach_map_runner_node`가 입력 cloud를 장애물 맵과 feasible 맵으로 변환할 때 사용하는 ROS 파라미터입니다.
 
+GPSR용으로는 `approach_gpsr_map_runner_node`와 `approach_map_runner/config/gpsr_runner_config.yaml`을 사용합니다. 이 노드는 같은 map/cost 토픽을 발행하지만 서비스는 `/approach/mapping/gpsr`이며, `mode 99`는 map만 갱신하고 goal 생성을 막고, `mode 100`은 같은 map 갱신 뒤 goal 생성을 켭니다.
+
 ### Topic 및 frame
 
 | 파라미터 | 현재 값 | 의미 |
@@ -200,7 +202,7 @@ feasible 후보들의 최종 cost 조합 방식을 설정합니다. 각 cost lay
 
 | 파라미터 | 현재 값 | 의미 |
 | --- | --- | --- |
-| `mode` | `1` | cost 노드의 **기본** mode입니다(런타임에는 `MappingControl` 서비스가 `/approach/cost_mode` 토픽으로 덮어씁니다). `1`=물체 일렬 가정, 두 물체를 잇는 선의 수직으로 접근. `3`=서비스 호출 시점의 로봇 정면(heading)을 고정 기준축으로 얼려 그 정면으로만 접근하며, 각 객체의 lateral 좌표를 가장 가까운 객체 기준선으로 snap해 두 물체를 접근 중심선 위에 정렬합니다(정면이 그 순간 객체를 향한다고 가정). 서비스 mode 3는 객체 2개만 받으며 target 배열이 4=(x,y,x,y) 또는 6=(x,y,z,x,y,z)일 때만 허용, 그 외 리젝. |
+| `mode` | `1` | cost 노드의 **기본** mode입니다(런타임에는 `MappingControl` 서비스가 `/approach/cost_mode` 토픽으로 덮어씁니다). `1`=물체 일렬 가정, 두 물체를 잇는 선의 수직으로 접근. `3`=서비스 호출 시점의 로봇 정면(heading)을 고정 기준축으로 얼려 그 정면으로만 접근하며, 각 객체의 lateral 좌표를 가장 가까운 객체 기준선으로 snap해 두 물체를 접근 중심선 위에 정렬합니다(정면이 그 순간 객체를 향한다고 가정). `99`=GPSR map-only로 cost/goal 발행 중지. `100`=GPSR goal 생성, visited 기반 후보 제거 비활성화. 서비스 mode 3는 객체 2개만 받으며 target 배열이 4=(x,y,x,y) 또는 6=(x,y,z,x,y,z)일 때만 허용, 그 외 리젝. |
 | `common.weight_target_distance` | `1.0` | target까지 거리가 가까운 후보를 선호하는 가중치입니다. |
 | `common.weight_stability` | `1.0` | 주변 셀 상태 변화가 적은 후보를 선호하는 가중치입니다. |
 | `common.weight_approach_distance` | `1.0` | 현재 로봇 위치에서 가까운 후보를 선호하는 가중치입니다. |

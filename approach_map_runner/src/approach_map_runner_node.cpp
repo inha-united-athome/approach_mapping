@@ -33,14 +33,21 @@
 namespace
 {
 
+#ifdef APPROACH_MAP_RUNNER_GPSR
+constexpr const char * kRunnerNodeName = "approach_gpsr_map_runner_node";
+constexpr const char * kMappingServiceName = "/approach/mapping/gpsr";
+#else
+constexpr const char * kRunnerNodeName = "approach_map_runner_node";
+#endif
+
 struct RunnerConfig
 {
   std::string input_cloud_topic{"/approach/accumulated_cloud"};
   std::string target_point_topic{"/approach/target_point"};
   std::string grasp_targets_topic{"/approach/grasp_targets"};
   // Latched topic carrying the active cost mode (1 = go straight to the grasp
-  // intersection, 3 = locked to robot front frozen at service time) so the cost node
-  // can switch behavior at runtime.
+  // intersection, 3 = locked to robot front frozen at service time, 99/100 = GPSR
+  // map-only/goal modes) so the cost node can switch behavior at runtime.
   std::string cost_mode_topic{"/approach/cost_mode"};
   std::string mapping_service_name{"approach_mapping"};
   std::string map_frame_id{"map"};
@@ -397,7 +404,7 @@ public:
   using MappingControl = inha_interfaces::srv::MappingControl;
 
   ApproachMapRunnerNode()
-  : Node("approach_map_runner_node")
+  : Node(kRunnerNodeName)
   {
     const std::string map_config_path =
       this->declare_parameter<std::string>("map_config_path", "");
@@ -407,6 +414,9 @@ public:
 
     map_config_ = approach_map::loadConfigFromYaml(map_config_path);
     runner_config_ = loadRunnerConfig(*this);
+#ifdef APPROACH_MAP_RUNNER_GPSR
+    runner_config_.mapping_service_name = kMappingServiceName;
+#endif
     preprocess_config_ = makePreprocessConfig(runner_config_);
 
     tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
@@ -551,11 +561,25 @@ private:
     if (!request->start) {
       mapping_enabled_ = false;
       origin_ready_ = false;
+#ifdef APPROACH_MAP_RUNNER_GPSR
+      publishGraspTargets({});
+      publishCostMode(99);
+#endif
       RCLCPP_INFO(this->get_logger(), "Mapping stopped by service request.");
       response->success = true;
       return;
     }
 
+#ifdef APPROACH_MAP_RUNNER_GPSR
+    if (request->mode != 99 && request->mode != 100) {
+      RCLCPP_WARN(
+        this->get_logger(),
+        "Unsupported GPSR mapping mode: %d. Only mode 99 and 100 are implemented.",
+        request->mode);
+      response->success = false;
+      return;
+    }
+#else
     if (request->mode != 0 && request->mode != 1 && request->mode != 2 &&
       request->mode != 3)
     {
@@ -566,6 +590,7 @@ private:
       response->success = false;
       return;
     }
+#endif
 
     if (request->target.size() < 2U) {
       RCLCPP_WARN(
@@ -585,6 +610,33 @@ private:
       return;
     }
 
+#ifdef APPROACH_MAP_RUNNER_GPSR
+    const bool had_initialized_map = has_initialized_map_;
+    if (had_initialized_map) {
+      shiftOriginFromTargetPreserveMap(target_x_m, target_y_m);
+    } else {
+      resetOriginFromTarget(target_x_m, target_y_m);
+      has_initialized_map_ = true;
+    }
+
+    mapping_enabled_ = true;
+    publishGraspTargets({});
+    if (request->mode == 100) {
+      publishTargetPoint(target_x_m, target_y_m);
+    }
+    publishCostMode(request->mode == 100 ? 100 : 99);
+
+    RCLCPP_INFO(
+      this->get_logger(),
+      "GPSR mode %d: %s map around target=(%.3f, %.3f)%s. Goal publication=%s.",
+      request->mode,
+      had_initialized_map ? "shifted existing" : "started new",
+      target_x_m, target_y_m,
+      request->target.size() > 2U ? " (additional target values ignored)" : "",
+      request->mode == 100 ? "enabled" : "disabled");
+    response->success = true;
+    return;
+#else
     if (request->mode == 3) {
       if (!mapping_enabled_) {
         RCLCPP_WARN(
@@ -770,6 +822,7 @@ private:
       target_x_m, target_y_m,
       request->target.size() > 2U ? " (additional target values ignored)" : "");
     response->success = true;
+#endif
   }
 
   bool transformCloud(
@@ -993,6 +1046,7 @@ private:
 
     builder_->beginUpdate();
 
+#ifndef APPROACH_MAP_RUNNER_GPSR
     if (runner_config_.robot_path_feasible_enable) {
       double robot_x_m = 0.0;
       double robot_y_m = 0.0;
@@ -1000,6 +1054,7 @@ private:
         builder_->markVisited(robot_x_m, robot_y_m, runner_config_.visited_radius_m);
       }
     }
+#endif
 
     for (const auto & point : map_cloud->points) {
       const double x_m = point.x;
@@ -1052,6 +1107,7 @@ private:
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   bool origin_ready_{false};
   bool mapping_enabled_{false};
+  bool has_initialized_map_{false};
   std::optional<std::pair<double, double>> last_published_target_;
 
   // Gating state.

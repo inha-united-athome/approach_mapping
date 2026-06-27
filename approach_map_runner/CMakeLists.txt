@@ -44,6 +44,10 @@ add_executable(approach_map_runner_node
   src/approach_map_runner_node.cpp
 )
 
+add_executable(approach_gpsr_map_runner_node
+  src/approach_map_runner_node.cpp
+)
+
 add_executable(approach_cost_runner_node
   src/approach_cost_runner_node.cpp
 )
@@ -53,6 +57,11 @@ add_executable(node_icp_cuda
 )
 
 target_include_directories(approach_map_runner_node PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
+target_include_directories(approach_gpsr_map_runner_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
@@ -68,6 +77,11 @@ target_include_directories(node_icp_cuda PUBLIC
 )
 
 target_link_libraries(approach_map_runner_node
+  approach_mapping::approach_map_lib
+  approach_preprocess::approach_preprocess_lib
+)
+
+target_link_libraries(approach_gpsr_map_runner_node
   approach_mapping::approach_map_lib
   approach_preprocess::approach_preprocess_lib
 )
@@ -89,7 +103,27 @@ if(EXISTS "${FAST_GICP_LOCAL_LIB_DIR}")
   )
 endif()
 
+target_compile_definitions(approach_gpsr_map_runner_node PRIVATE
+  APPROACH_MAP_RUNNER_GPSR=1
+)
+
 ament_target_dependencies(approach_map_runner_node
+  approach_mapping
+  approach_preprocess
+  geometry_msgs
+  nav_msgs
+  pcl_conversions
+  rclcpp
+  sensor_msgs
+  std_msgs
+  tf2
+  tf2_geometry_msgs
+  tf2_ros
+  tf2_sensor_msgs
+  inha_interfaces
+)
+
+ament_target_dependencies(approach_gpsr_map_runner_node
   approach_mapping
   approach_preprocess
   geometry_msgs
@@ -136,6 +170,7 @@ ament_target_dependencies(node_icp_cuda
 
 install(TARGETS
   approach_map_runner_node
+  approach_gpsr_map_runner_node
   approach_cost_runner_node
   node_icp_cuda
   DESTINATION lib/${PROJECT_NAME}

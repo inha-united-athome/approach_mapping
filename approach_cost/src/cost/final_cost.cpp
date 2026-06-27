@@ -12,8 +12,11 @@ approach_map::GridDataF32 computeFinalCost(
   switch (config.mode) {
     case ModeId::Mode1:
     case ModeId::Mode3:
+    case ModeId::GpsrMapOnly:
+    case ModeId::GpsrGoal:
       // Mode3 differs only in how the runner derives object_row_dir / target_point
-      // (frozen robot-front frame); the cost composition itself is identical.
+      // (frozen robot-front frame). GPSR modes are handled by the runner around
+      // goal publication / visited filtering. The cost composition itself is identical.
       return common_layers.cost_common;
     default:
       throw std::runtime_error("Unsupported final cost mode");

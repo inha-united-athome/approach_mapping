@@ -28,6 +28,10 @@ ModeId readMode(const YAML::Node & node)
       return ModeId::Mode1;
     case 3:
       return ModeId::Mode3;
+    case 99:
+      return ModeId::GpsrMapOnly;
+    case 100:
+      return ModeId::GpsrGoal;
     default:
       throw std::runtime_error("Unsupported cost mode: " + std::to_string(mode_value));
   }

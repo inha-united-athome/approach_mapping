@@ -22,6 +22,12 @@ enum class ModeId : uint8_t
   // (a frozen reference frame), so the robot drives straight in along its front. See
   // approach_cost_runner_node.cpp.
   Mode3 = 3,
+  // GPSR map-only mode: the map runner updates/relocates the map, but the cost runner
+  // must not emit goal poses from stale targets.
+  GpsrMapOnly = 99,
+  // GPSR goal mode: same map behavior as GpsrMapOnly, with normal goal generation and
+  // no visited-cell goal filtering.
+  GpsrGoal = 100,
 };
 
 /**

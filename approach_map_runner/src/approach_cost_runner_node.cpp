@@ -48,8 +48,8 @@ struct CostRunnerConfig
   std::string target_point_topic{"/approach/target_point"};
   std::string grasp_targets_topic{"/approach/grasp_targets"};
   // Active cost mode published by the runner service (1 = go straight to the grasp
-  // intersection, 3 = locked to robot front frozen at service time). Overrides the
-  // static yaml mode.
+  // intersection, 3 = locked to robot front frozen at service time, 99 = GPSR map only,
+  // 100 = GPSR goal without visited filtering). Overrides the static yaml mode.
   std::string cost_mode_topic{"/approach/cost_mode"};
   std::string grasp_status_topic{"/approach/grasp_status"};
   std::string robot_frame_id{"base_nav"};
@@ -947,15 +947,37 @@ private:
 
   // Runtime cost-mode switch driven by the runner service. Mode 3 re-freezes the
   // approach front (captured on the next feasible-map frame), tying the freeze to the
-  // service call. Unknown values fall back to Mode1.
+  // service call. Mode 99 disables goal generation for GPSR map-only updates, and
+  // mode 100 enables GPSR goal generation without visited-cell filtering. Unknown
+  // values fall back to Mode1.
   void costModeCallback(const std_msgs::msg::Int32::SharedPtr msg)
   {
-    const auto mode = (msg->data == 3) ? approach_cost::ModeId::Mode3
-      : approach_cost::ModeId::Mode1;
+    approach_cost::ModeId mode = approach_cost::ModeId::Mode1;
+    switch (msg->data) {
+      case 3:
+        mode = approach_cost::ModeId::Mode3;
+        break;
+      case 99:
+        mode = approach_cost::ModeId::GpsrMapOnly;
+        break;
+      case 100:
+        mode = approach_cost::ModeId::GpsrGoal;
+        break;
+      default:
+        mode = approach_cost::ModeId::Mode1;
+        break;
+    }
     active_mode_ = mode;
+    cost_config_.mode = mode;
     if (mode == approach_cost::ModeId::Mode3) {
       frozen_front_dir_.reset();
       front_capture_pending_ = true;
+    } else {
+      frozen_front_dir_.reset();
+      front_capture_pending_ = false;
+    }
+    if (mode == approach_cost::ModeId::GpsrMapOnly) {
+      invalidateApproachReadiness();
     }
     RCLCPP_INFO(this->get_logger(), "Cost mode set to %d", static_cast<int>(msg->data));
   }
@@ -1045,6 +1067,14 @@ private:
     const auto callback_started = std::chrono::steady_clock::now();
     const double callback_received_time_sec = this->now().seconds();
 
+    if (active_mode_ == approach_cost::ModeId::GpsrMapOnly) {
+      invalidateApproachReadiness();
+      RCLCPP_DEBUG_THROTTLE(
+        this->get_logger(), *this->get_clock(), 3000,
+        "GPSR mode 99 is active; suppressing cost and goal publication.");
+      return;
+    }
+
     if (!latest_target_point_.has_value()) {
       invalidateApproachReadiness();
       RCLCPP_WARN_THROTTLE(
@@ -1127,7 +1157,10 @@ private:
     // already passed while leaving the forward approach corridor — where the goal lives —
     // un-eroded. Falls back to excluding all visited cells when the approach direction is
     // undefined (robot sitting on the target).
-    if (runner_config_.exclude_visited_from_goals && latest_visited_map_.has_value()) {
+    const bool filter_visited_goals =
+      runner_config_.exclude_visited_from_goals &&
+      active_mode_ != approach_cost::ModeId::GpsrGoal;
+    if (filter_visited_goals && latest_visited_map_.has_value()) {
       if (haveMatchingGridGeometry(*msg, latest_visited_map_.value())) {
         const auto & visited = latest_visited_map_.value().data;
         const double approach_dx = input.target_point_m.x_m - robot_point.x_m;
